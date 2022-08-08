@@ -45,21 +45,21 @@ $autodiscover_config = array(
   // The autoconfig service will additionally announce the STARTTLS-enabled ports, specified in the "tlsport" variable.
   'imap' => array(
     'server' => $mailcow_hostname,
-    'port' => end(explode(':', getenv('IMAPS_PORT'))),
-    'tlsport' => end(explode(':', getenv('IMAP_PORT'))),
+    'port' => (int)filter_var(substr(getenv('IMAPS_PORT'), strrpos(getenv('IMAPS_PORT'), ':')), FILTER_SANITIZE_NUMBER_INT),
+    'tlsport' => (int)filter_var(substr(getenv('IMAP_PORT'), strrpos(getenv('IMAP_PORT'), ':')), FILTER_SANITIZE_NUMBER_INT)
   ),
   'pop3' => array(
     'server' => $mailcow_hostname,
-    'port' => end(explode(':', getenv('POPS_PORT'))),
-    'tlsport' => end(explode(':', getenv('POP_PORT'))),
+    'port' => (int)filter_var(substr(getenv('POPS_PORT'), strrpos(getenv('POPS_PORT'), ':')), FILTER_SANITIZE_NUMBER_INT),
+    'tlsport' => (int)filter_var(substr(getenv('POP_PORT'), strrpos(getenv('POP_PORT'), ':')), FILTER_SANITIZE_NUMBER_INT)
   ),
   'smtp' => array(
     'server' => $mailcow_hostname,
-    'port' => end(explode(':', getenv('SMTPS_PORT'))),
-    'tlsport' => end(explode(':', getenv('SUBMISSION_PORT'))),
+    'port' => (int)filter_var(substr(getenv('SMTPS_PORT'), strrpos(getenv('SMTPS_PORT'), ':')), FILTER_SANITIZE_NUMBER_INT),
+    'tlsport' => (int)filter_var(substr(getenv('SUBMISSION_PORT'), strrpos(getenv('SUBMISSION_PORT'), ':')), FILTER_SANITIZE_NUMBER_INT)
   ),
   'activesync' => array(
-    'url' => 'https://'.$mailcow_hostname.($https_port == 443 ? '' : ':'.$https_port).'/Microsoft-Server-ActiveSync',
+    'url' => 'https://' . $mailcow_hostname . ($https_port == 443 ? '' : ':' . $https_port) . '/Microsoft-Server-ActiveSync',
   ),
   'caldav' => array(
     'server' => $mailcow_hostname,
@@ -79,7 +79,30 @@ $DETECT_LANGUAGE = true;
 $DEFAULT_LANG = 'en';
 
 // Available languages
-$AVAILABLE_LANGUAGES = array('ca', 'cs', 'de', 'en', 'es', 'fi', 'fr', 'hu', 'it', 'ko', 'lv', 'nl', 'pl', 'pt', 'ro', 'ru', 'sk', 'sv', 'zh');
+// https://www.iso.org/obp/ui/#search
+// https://en.wikipedia.org/wiki/List_of_ISO_639-1_codes
+$AVAILABLE_LANGUAGES = array(
+  'cs' => 'Čeština (Czech)',
+  'da' => 'Danish (Dansk)',
+  'de' => 'Deutsch (German)',
+  'en' => 'English',
+  'es' => 'Español (Spanish)',
+  'fi' => 'Suomi (Finish)',
+  'fr' => 'Français (French)',
+  'hu' => 'Magyar (Hungarian)',
+  'it' => 'Italiano (Italian)',
+  'ko' => '한국어 (Korean)',
+  'lv' => 'latviešu (Latvian)',
+  'nl' => 'Nederlands (Dutch)',
+  'pl' => 'Język Polski (Polish)',
+  'pt' => 'Português (Portuguese)',
+  'ro' => 'Română (Romanian)',
+  'ru' => 'Pусский (Russian)',
+  'sk' => 'Slovenčina (Slovak)',
+  'sv' => 'Svenska (Swedish)',
+  'uk' => 'Українська (Ukrainian)',
+  'zh' => '中文 (Chinese)'
+);
 
 // Change theme (default: lumen)
 // Needs to be one of those: cerulean, cosmo, cyborg, darkly, flatly, journal, lumen, paper, readable, sandstone,
@@ -87,14 +110,6 @@ $AVAILABLE_LANGUAGES = array('ca', 'cs', 'de', 'en', 'es', 'fi', 'fr', 'hu', 'it
 // See https://bootswatch.com/
 // WARNING: Only lumen is loaded locally. Enabling any other theme, will download external sources.
 $DEFAULT_THEME = 'lumen';
-
-// Password complexity as regular expression
-// Min. 6 characters
-$PASSWD_REGEP = '.{6,}';
-// Min. 6 characters, which must include at least one uppercase letter, one lowercase letter and one number
-// $PASSWD_REGEP = '^(?=.*[A-Z])(?=.*[0-9])(?=.*[a-z]).{6,}$';
-// Min. 6 characters, which must include at least one letter and one number
-// $PASSWD_REGEP = '^(?=.*[0-9])(?=.*[A-Za-z]).{6,}$';
 
 // Show DKIM private keys - false by default
 $SHOW_DKIM_PRIV_KEYS = false;
@@ -122,14 +137,8 @@ $SESSION_LIFETIME = 10800;
 // Label for OTP devices
 $OTP_LABEL = "mailcow UI";
 
-// Default "to" address in relay test tool
-$RELAY_TO = "null@hosted.mailcow.de";
-
 // How long to wait (in s) for cURL Docker requests
 $DOCKER_TIMEOUT = 60;
-
-// Anonymize IPs logged via UI
-$ANONYMIZE_IPS = true;
 
 // Split DKIM key notation (bind format)
 $SPLIT_DKIM_255 = false;
@@ -139,6 +148,9 @@ $REFRESH_TOKEN_LIFETIME = 2678400;
 $ACCESS_TOKEN_LIFETIME = 86400;
 // Logout from mailcow after first OAuth2 session profile request
 $OAUTH2_FORGET_SESSION_AFTER_LOGIN = false;
+
+// Set a limit for mailbox and domain tagging
+$TAGGING_LIMIT = 25;
 
 // MAILBOX_DEFAULT_ATTRIBUTES define default attributes for new mailboxes
 // These settings will not change existing mailboxes
@@ -167,6 +179,9 @@ $MAILBOX_DEFAULT_ATTRIBUTES['pop3_access'] = true;
 // Mailbox has SMTP access by default
 $MAILBOX_DEFAULT_ATTRIBUTES['smtp_access'] = true;
 
+// Mailbox has sieve access by default
+$MAILBOX_DEFAULT_ATTRIBUTES['sieve_access'] = true;
+
 // Mailbox receives notifications about...
 // "add_header" - mail that was put into the Junk folder
 // "reject" - mail that was rejected
@@ -184,10 +199,16 @@ $SHOW_LAST_LOGIN = true;
 // true = required
 // false = preferred
 // string 'required' 'preferred' 'discouraged'
+$WEBAUTHN_UV_FLAG_REGISTER = false;
+$WEBAUTHN_UV_FLAG_LOGIN = false;
+$WEBAUTHN_USER_PRESENT_FLAG = true;
+
 $FIDO2_UV_FLAG_REGISTER = 'preferred';
 $FIDO2_UV_FLAG_LOGIN = 'preferred'; // iOS ignores the key via NFC if required - known issue
 $FIDO2_USER_PRESENT_FLAG = true;
+
 $FIDO2_FORMATS = array('apple', 'android-key', 'android-safetynet', 'fido-u2f', 'none', 'packed', 'tpm');
+
 
 // Set visible Rspamd maps in mailcow UI, do not change unless you know what you are doing
 $RSPAMD_MAPS = array(
@@ -203,6 +224,135 @@ $RSPAMD_MAPS = array(
     'Bad Words DE (only fired in combination with fishy TLDs)' => 'bad_words_de.map',
     'Bad Languages' => 'bad_languages.map',
     'Bulk Mail Headers' => 'bulk_header.map',
+    'Bad (Junk) Mail Headers' => 'bad_header.map',
     'Monitoring Hosts' => 'monitoring_nolog.map'
+  )
+);
+
+
+$IMAPSYNC_OPTIONS = array(
+  'whitelist' => array(
+    'authmech1',
+    'authmech2',
+    'authuser1', 
+    'authuser2', 
+    'debugcontent', 
+    'disarmreadreceipts', 
+    'logdir',
+    'debugcrossduplicates', 
+    'maxsize',
+    'minsize',
+    'minage',
+    'search', 
+    'noabletosearch', 
+    'pidfile', 
+    'pidfilelocking', 
+    'search1',
+    'search2', 
+    'sslargs1',
+    'sslargs2', 
+    'syncduplicates',
+    'usecache', 
+    'synclabels', 
+    'truncmess',  
+    'domino2',  
+    'expunge1',  
+    'filterbuggyflags',  
+    'justconnect',  
+    'justfolders',  
+    'maxlinelength',
+    'useheader',  
+    'noabletosearch1',  
+    'nolog',  
+    'prefix1',
+    'prefix2',
+    'sep1',
+    'sep2',
+    'nofoldersizesatend',
+    'justfoldersizes',  
+    'proxyauth1',  
+    'skipemptyfolders',
+    'include',
+    'subfolder1',
+    'subscribed',
+    'subscribe',   
+    'debug',   
+    'debugimap2',   
+    'domino1',   
+    'exchange1',   
+    'exchange2',   
+    'justlogin',   
+    'keepalive1',   
+    'keepalive2',   
+    'noabletosearch2',   
+    'noexpunge2',   
+    'noresyncflags',   
+    'nossl1',   
+    'nouidexpunge2',   
+    'syncinternaldates',
+    'idatefromheader',   
+    'useuid',    
+    'debugflags',    
+    'debugimap',    
+    'delete1emptyfolders',
+    'delete2folders',    
+    'gmail2',    
+    'office1',    
+    'testslive6',     
+    'debugimap1',     
+    'errorsmax',
+    'tests',     
+    'gmail1',     
+    'maxmessagespersecond',
+    'maxbytesafter',
+    'maxsleep',
+    'abort',     
+    'resyncflags',     
+    'resynclabels',     
+    'syncacls',
+    'nosyncacls',      
+    'nousecache',      
+    'office2',      
+    'testslive',       
+    'debugmemory',       
+    'exitwhenover',
+    'noid',       
+    'noexpunge1',        
+    'authmd51',        
+    'logfile',        
+    'proxyauth2',         
+    'domain1',
+    'domain2',
+    'oauthaccesstoken1',
+    'oauthaccesstoken2',
+    'oauthdirect1',
+    'oauthdirect2',
+    'folder',
+    'folderrec',
+    'folderfirst',
+    'folderlast',
+    'nomixfolders',          
+    'authmd52',           
+    'debugfolders',            
+    'nossl2',            
+    'ssl2',            
+    'tls2',             
+    'notls2',              
+    'debugssl',              
+    'notls1', 
+    'inet4',
+    'inet6',
+    'log',
+    'showpasswords'
+  ),
+  'blacklist' => array(
+    'skipmess',
+    'delete2foldersonly',
+    'delete2foldersbutnot',
+    'regexflag',
+    'regexmess',
+    'pipemess',
+    'regextrans2',
+    'maxlinelengthcmd'
   )
 );

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-DEBIAN_DOCKER_IMAGE="debian:buster-slim"
+DEBIAN_DOCKER_IMAGE="debian:bullseye-slim"
 
 if [[ ! -z ${MAILCOW_BACKUP_LOCATION} ]]; then
   BACKUP_LOCATION="${MAILCOW_BACKUP_LOCATION}"
@@ -76,42 +76,54 @@ else
   CMPS_PRJ=$(echo ${COMPOSE_PROJECT_NAME} | tr -cd "[0-9A-Za-z-_]")
 fi
 
+if grep --help 2>&1 | head -n 1 | grep -q -i "busybox"; then
+  >&2 echo -e "\e[31mBusyBox grep detected on local system, please install GNU grep\e[0m"
+  exit 1
+fi
+
+
 function backup() {
   DATE=$(date +"%Y-%m-%d-%H-%M-%S")
   mkdir -p "${BACKUP_LOCATION}/mailcow-${DATE}"
   chmod 755 "${BACKUP_LOCATION}/mailcow-${DATE}"
   cp "${SCRIPT_DIR}/../mailcow.conf" "${BACKUP_LOCATION}/mailcow-${DATE}"
+  for bin in docker; do
+  if [[ -z $(which ${bin}) ]]; then
+    >&2 echo -e "\e[31mCannot find ${bin} in local PATH, exiting...\e[0m"
+    exit 1
+  fi
+  done
   while (( "$#" )); do
     case "$1" in
     vmail|all)
       docker run --name mailcow-backup --rm \
         -v ${BACKUP_LOCATION}/mailcow-${DATE}:/backup:z \
-        -v $(docker volume ls -qf name=${CMPS_PRJ}_vmail-vol-1):/vmail:ro,z \
+        -v $(docker volume ls -qf name=^${CMPS_PRJ}_vmail-vol-1$):/vmail:ro,z \
         ${DEBIAN_DOCKER_IMAGE} /bin/tar --warning='no-file-ignored' --use-compress-program="gzip --rsyncable" -Pcvpf /backup/backup_vmail.tar.gz /vmail
       ;;&
     crypt|all)
       docker run --name mailcow-backup --rm \
         -v ${BACKUP_LOCATION}/mailcow-${DATE}:/backup:z \
-        -v $(docker volume ls -qf name=${CMPS_PRJ}_crypt-vol-1):/crypt:ro,z \
+        -v $(docker volume ls -qf name=^${CMPS_PRJ}_crypt-vol-1$):/crypt:ro,z \
         ${DEBIAN_DOCKER_IMAGE} /bin/tar --warning='no-file-ignored' --use-compress-program="gzip --rsyncable" -Pcvpf /backup/backup_crypt.tar.gz /crypt
       ;;&
     redis|all)
       docker exec $(docker ps -qf name=redis-mailcow) redis-cli save
       docker run --name mailcow-backup --rm \
         -v ${BACKUP_LOCATION}/mailcow-${DATE}:/backup:z \
-        -v $(docker volume ls -qf name=${CMPS_PRJ}_redis-vol-1):/redis:ro,z \
+        -v $(docker volume ls -qf name=^${CMPS_PRJ}_redis-vol-1$):/redis:ro,z \
         ${DEBIAN_DOCKER_IMAGE} /bin/tar --warning='no-file-ignored' --use-compress-program="gzip --rsyncable" -Pcvpf /backup/backup_redis.tar.gz /redis
       ;;&
     rspamd|all)
       docker run --name mailcow-backup --rm \
         -v ${BACKUP_LOCATION}/mailcow-${DATE}:/backup:z \
-        -v $(docker volume ls -qf name=${CMPS_PRJ}_rspamd-vol-1):/rspamd:ro,z \
+        -v $(docker volume ls -qf name=^${CMPS_PRJ}_rspamd-vol-1$):/rspamd:ro,z \
         ${DEBIAN_DOCKER_IMAGE} /bin/tar --warning='no-file-ignored' --use-compress-program="gzip --rsyncable" -Pcvpf /backup/backup_rspamd.tar.gz /rspamd
       ;;&
     postfix|all)
       docker run --name mailcow-backup --rm \
         -v ${BACKUP_LOCATION}/mailcow-${DATE}:/backup:z \
-        -v $(docker volume ls -qf name=${CMPS_PRJ}_postfix-vol-1):/postfix:ro,z \
+        -v $(docker volume ls -qf name=^${CMPS_PRJ}_postfix-vol-1$):/postfix:ro,z \
         ${DEBIAN_DOCKER_IMAGE} /bin/tar --warning='no-file-ignored' --use-compress-program="gzip --rsyncable" -Pcvpf /backup/backup_postfix.tar.gz /postfix
       ;;&
     mysql|all)
@@ -123,9 +135,10 @@ function backup() {
       else
         echo "Using SQL image ${SQLIMAGE}, starting..."
         docker run --name mailcow-backup --rm \
-          --network $(docker network ls -qf name=${CMPS_PRJ}_mailcow-network) \
-          -v $(docker volume ls -qf name=${CMPS_PRJ}_mysql-vol-1):/var/lib/mysql/:ro,z \
-          --entrypoint= \
+          --network $(docker network ls -qf name=^${CMPS_PRJ}_mailcow-network$) \
+          -v $(docker volume ls -qf name=^${CMPS_PRJ}_mysql-vol-1$):/var/lib/mysql/:ro,z \
+          -t --entrypoint= \
+          --sysctl net.ipv6.conf.all.disable_ipv6=1 \
           -v ${BACKUP_LOCATION}/mailcow-${DATE}:/backup:z \
           ${SQLIMAGE} /bin/sh -c "mariabackup --host mysql --user root --password ${DBROOT} --backup --rsync --target-dir=/backup_mariadb ; \
           mariabackup --prepare --target-dir=/backup_mariadb ; \
@@ -147,6 +160,12 @@ function backup() {
 }
 
 function restore() {
+  for bin in docker docker-compose; do
+  if [[ -z $(which ${bin}) ]]; then
+    >&2 echo -e "\e[31mCannot find ${bin} in local PATH, exiting...\e[0m"
+    exit 1
+  fi
+  done  
   echo
   echo "Stopping watchdog-mailcow..."
   docker stop $(docker ps -qf name=watchdog-mailcow)
@@ -159,7 +178,7 @@ function restore() {
       docker stop $(docker ps -qf name=dovecot-mailcow)
       docker run -it --name mailcow-backup --rm \
         -v ${RESTORE_LOCATION}:/backup:z \
-        -v $(docker volume ls -qf name=${CMPS_PRJ}_vmail-vol-1):/vmail:z \
+        -v $(docker volume ls -qf name=^${CMPS_PRJ}_vmail-vol-1$):/vmail:z \
         ${DEBIAN_DOCKER_IMAGE} /bin/tar -Pxvzf /backup/backup_vmail.tar.gz
       docker start $(docker ps -aqf name=dovecot-mailcow)
       echo
@@ -178,7 +197,7 @@ function restore() {
       docker stop $(docker ps -qf name=redis-mailcow)
       docker run -it --name mailcow-backup --rm \
         -v ${RESTORE_LOCATION}:/backup:z \
-        -v $(docker volume ls -qf name=${CMPS_PRJ}_redis-vol-1):/redis:z \
+        -v $(docker volume ls -qf name=^${CMPS_PRJ}_redis-vol-1$):/redis:z \
         ${DEBIAN_DOCKER_IMAGE} /bin/tar -Pxvzf /backup/backup_redis.tar.gz
       docker start $(docker ps -aqf name=redis-mailcow)
       ;;
@@ -186,7 +205,7 @@ function restore() {
       docker stop $(docker ps -qf name=dovecot-mailcow)
       docker run -it --name mailcow-backup --rm \
         -v ${RESTORE_LOCATION}:/backup:z \
-        -v $(docker volume ls -qf name=${CMPS_PRJ}_crypt-vol-1):/crypt:z \
+        -v $(docker volume ls -qf name=^${CMPS_PRJ}_crypt-vol-1$):/crypt:z \
         ${DEBIAN_DOCKER_IMAGE} /bin/tar -Pxvzf /backup/backup_crypt.tar.gz
       docker start $(docker ps -aqf name=dovecot-mailcow)
       ;;
@@ -194,7 +213,7 @@ function restore() {
       docker stop $(docker ps -qf name=rspamd-mailcow)
       docker run -it --name mailcow-backup --rm \
         -v ${RESTORE_LOCATION}:/backup:z \
-        -v $(docker volume ls -qf name=${CMPS_PRJ}_rspamd-vol-1):/rspamd:z \
+        -v $(docker volume ls -qf name=^${CMPS_PRJ}_rspamd-vol-1$):/rspamd:z \
         ${DEBIAN_DOCKER_IMAGE} /bin/tar -Pxvzf /backup/backup_rspamd.tar.gz
       docker start $(docker ps -aqf name=rspamd-mailcow)
       ;;
@@ -202,7 +221,7 @@ function restore() {
       docker stop $(docker ps -qf name=postfix-mailcow)
       docker run -it --name mailcow-backup --rm \
         -v ${RESTORE_LOCATION}:/backup:z \
-        -v $(docker volume ls -qf name=${CMPS_PRJ}_postfix-vol-1):/postfix:z \
+        -v $(docker volume ls -qf name=^${CMPS_PRJ}_postfix-vol-1$):/postfix:z \
         ${DEBIAN_DOCKER_IMAGE} /bin/tar -Pxvzf /backup/backup_postfix.tar.gz
       docker start $(docker ps -aqf name=postfix-mailcow)
       ;;
@@ -230,14 +249,14 @@ function restore() {
         #docker stop $(docker ps -qf name=mysql-mailcow)
         if [[ -d "${RESTORE_LOCATION}/mysql" ]]; then
         docker run --name mailcow-backup --rm \
-          -v $(docker volume ls -qf name=${CMPS_PRJ}_mysql-vol-1):/var/lib/mysql/:rw,z \
+          -v $(docker volume ls -qf name=^${CMPS_PRJ}_mysql-vol-1$):/var/lib/mysql/:rw,z \
           --entrypoint= \
           -v ${RESTORE_LOCATION}/mysql:/backup:z \
           ${SQLIMAGE} /bin/bash -c "shopt -s dotglob ; /bin/rm -rf /var/lib/mysql/* ; rsync -avh --usermap=root:mysql --groupmap=root:mysql /backup/ /var/lib/mysql/"
         elif [[ -f "${RESTORE_LOCATION}/backup_mysql.gz" ]]; then
         docker run \
           -it --name mailcow-backup --rm \
-          -v $(docker volume ls -qf name=${CMPS_PRJ}_mysql-vol-1):/var/lib/mysql/:z \
+          -v $(docker volume ls -qf name=^${CMPS_PRJ}_mysql-vol-1$):/var/lib/mysql/:z \
           --entrypoint= \
           -u mysql \
           -v ${RESTORE_LOCATION}:/backup:z \
@@ -248,7 +267,7 @@ function restore() {
           mysql -uroot -e SHUTDOWN;"
         elif [[ -f "${RESTORE_LOCATION}/backup_mariadb.tar.gz" ]]; then
         docker run --name mailcow-backup --rm \
-          -v $(docker volume ls -qf name=${CMPS_PRJ}_mysql-vol-1):/backup_mariadb/:rw,z \
+          -v $(docker volume ls -qf name=^${CMPS_PRJ}_mysql-vol-1$):/backup_mariadb/:rw,z \
           --entrypoint= \
           -v ${RESTORE_LOCATION}:/backup:z \
           ${SQLIMAGE} /bin/bash -c "shopt -s dotglob ; \

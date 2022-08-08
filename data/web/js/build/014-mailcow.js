@@ -48,7 +48,7 @@ $(document).ready(function() {
       $(div).animate({ left: ((iter%2==0 ? distance : distance*-1))}, interval);
     }
     $(div).animate({ left: 0},interval);
-  }
+  } 
 
   // form cache
   $('[data-cached-form="true"]').formcache({key: $(this).data('id')});
@@ -93,10 +93,20 @@ $(document).ready(function() {
   }).remove();
 
   // selectpicker
-  $('select').selectpicker();
+  $('select').selectpicker({
+    'styleBase': 'btn btn-xs-lg',
+    'noneSelectedText': lang_footer.nothing_selected
+  });
 
-  // haveibeenpwned?
-  $('[data-hibp]').after('<p class="small haveibeenpwned">↪ Check against haveibeenpwned.com</p><span class="hibp-out"></span>');
+  // haveibeenpwned and passwd policy
+  $.ajax({
+    url: '/api/v1/get/passwordpolicy/html',
+    type: 'GET',
+    success: function(res) {
+      $(".hibp-out").after(res);
+    }
+  });
+  $('[data-hibp]').after('<p class="small haveibeenpwned"><i class="bi bi-shield-fill-exclamation"></i> ' + lang_footer.hibp_check + '</p><span class="hibp-out"></span>');
   $('[data-hibp]').on('input', function() {
     out_field = $(this).next('.haveibeenpwned').next('.hibp-out').text('').attr('class', 'hibp-out');
   });
@@ -149,8 +159,8 @@ $(document).ready(function() {
     }
     if ($(this).is("select")) {
       $(this).selectpicker('destroy');
-      $(this).replaceWith(function() { 
-        return '<label class="control-label"><b>' + this.innerText + '</b></label>'; 
+      $(this).replaceWith(function() {
+        return '<label class="control-label"><b>' + this.innerText + '</b></label>';
       });
     }
     if ($(this).hasClass('btn-group')) {
@@ -188,7 +198,9 @@ $(document).ready(function() {
     } else if ($(this).hasClass('btn')) {
       $(this).attr("disabled", true);
     } else if ($(this).attr('data-provide') == 'slider') {
-      $(this).slider("disable");
+      $(this).attr('disabled', true);
+    } else if ($(this).is(':checkbox')) {
+      $(this).attr("disabled", true);
     }
     $(this).data("toggle", "tooltip");
     $(this).attr("title", lang_acl.prohibited);
@@ -214,7 +226,7 @@ $(document).ready(function() {
     $('#containerName').text(container);
     $('#triggerRestartContainer').click(function(){
       $(this).prop("disabled",true);
-      $(this).html('<span class="glyphicon glyphicon-refresh glyphicon-spin"></span> ');
+      $(this).html('<i class="bi bi-arrow-repeat icon-spin"></i> ');
       $('#statusTriggerRestartContainer').html(lang_footer.restarting_container);
       $.ajax({
         method: 'get',
@@ -229,15 +241,83 @@ $(document).ready(function() {
         $('#statusTriggerRestartContainer').append(data);
         var htmlResponse = $.parseHTML(data)
         if ($(htmlResponse).find('span').hasClass('text-success')) {
-          $('#triggerRestartContainer').html('<span class="glyphicon glyphicon-ok"></span> ');
+          $('#triggerRestartContainer').html('<i class="bi bi-check-lg"></i> ');
           setTimeout(function(){
-            $('#RestartContainer').modal('toggle'); 
+            $('#RestartContainer').modal('toggle');
             window.location = window.location.href.split("#")[0];
           }, 1200);
         } else {
-          $('#triggerRestartContainer').html('<span class="glyphicon glyphicon-remove"></span> ');
+          $('#triggerRestartContainer').html('<i class="bi bi-slash-lg"></i> ');
         }
       })
     });
   })
+
+  // responsive tabs
+  $('.responsive-tabs').tabCollapse({
+    tabsClass: 'hidden-xs',
+    accordionClass: 'js-tabcollapse-panel-group visible-xs'
+  });
+  $(document).on("shown.bs.collapse shown.bs.tab", function (e) {
+	  var target = $(e.target);
+	  if($(window).width() <= 767) {
+		  var offset = target.offset().top - 112;
+		  $("html, body").stop().animate({
+		    scrollTop: offset
+		  }, 100);
+	  }
+	  if(target.hasClass('panel-collapse')){
+	    var id = e.target.id.replace(/-collapse$/g, '');
+	    if(id){
+          localStorage.setItem('lastTag', '#'+id);
+        }
+      }
+  });
+
+  // tag boxes
+  $('.tag-box .tag-add').click(function(){
+    addTag(this);
+  });
+  $(".tag-box .tag-input").keydown(function (e) {
+    if (e.which == 13){
+      e.preventDefault();
+      addTag(this);
+    } 
+  });
+  function addTag(tagAddElem){
+    var tagboxElem = $(tagAddElem).parent();
+    var tagInputElem = $(tagboxElem).find(".tag-input")[0];
+    var tagValuesElem = $(tagboxElem).find(".tag-values")[0];
+
+    var tag = escapeHtml($(tagInputElem).val());
+    if (!tag) return;
+    var value_tags = [];
+    try {
+      value_tags = JSON.parse($(tagValuesElem).val());
+    } catch {}
+    if (!Array.isArray(value_tags)) value_tags = [];
+    if (value_tags.includes(tag)) return;
+
+    $('<span class="badge badge-primary tag-badge btn-badge"><i class="bi bi-tag-fill"></i> ' + tag + '</span>').insertBefore('.tag-input').click(function(){
+      var del_tag = unescapeHtml($(this).text());
+      var del_tags = [];
+      try {
+        del_tags = JSON.parse($(tagValuesElem).val());
+      } catch {}
+      if (Array.isArray(del_tags)){
+        del_tags.splice(del_tags.indexOf(del_tag), 1);
+        $(tagValuesElem).val(JSON.stringify(del_tags));
+      }
+      $(this).remove();
+    });
+
+    value_tags.push($(tagInputElem).val());
+    $(tagValuesElem).val(JSON.stringify(value_tags));
+    $(tagInputElem).val('');
+  }
 });
+
+
+// http://stackoverflow.com/questions/24816/escaping-html-strings-with-jquery
+function escapeHtml(n){var entityMap={"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;","/":"&#x2F;","`":"&#x60;","=":"&#x3D;"}; return String(n).replace(/[&<>"'`=\/]/g,function(n){return entityMap[n]})}
+function unescapeHtml(t){var n={"&amp;":"&","&lt;":"<","&gt;":">","&quot;":'"',"&#39;":"'","&#x2F;":"/","&#x60;":"`","&#x3D;":"="};return String(t).replace(/&amp;|&lt;|&gt;|&quot;|&#39;|&#x2F|&#x60|&#x3D;/g,function(t){return n[t]})}

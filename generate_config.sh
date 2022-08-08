@@ -12,8 +12,8 @@ if [[ "$(uname -r)" =~ ^4\.4\. ]]; then
   if grep -q Ubuntu <<< $(uname -a); then
     echo "DO NOT RUN mailcow ON THIS UBUNTU KERNEL!";
     echo "Please update to linux-generic-hwe-16.04 by running \"apt-get install --install-recommends linux-generic-hwe-16.04\""
+    exit 1
   fi
-  exit 1
 fi
 
 if grep --help 2>&1 | grep -q -i "busybox"; then
@@ -25,12 +25,12 @@ if cp --help 2>&1 | grep -q -i "busybox"; then
   exit 1
 fi
 
-for bin in openssl curl docker-compose docker git awk sha1sum; do
+for bin in openssl curl docker docker-compose git awk sha1sum; do
   if [[ -z $(which ${bin}) ]]; then echo "Cannot find ${bin}, exiting..."; exit 1; fi
 done
 
 if [ -f mailcow.conf ]; then
-  read -r -p "A config file exists and will be overwritten, are you sure you want to contine? [y/N] " response
+  read -r -p "A config file exists and will be overwritten, are you sure you want to continue? [y/N] " response
   case $response in
     [yY][eE][sS]|[yY])
       mv mailcow.conf mailcow.conf_backup
@@ -119,7 +119,7 @@ MAILCOW_HOSTNAME=${MAILCOW_HOSTNAME}
 
 # Password hash algorithm
 # Only certain password hash algorithm are supported. For a fully list of supported schemes,
-# see https://mailcow.github.io/mailcow-dockerized-docs/model-passwd/
+# see https://mailcow.github.io/mailcow-dockerized-docs/models/model-passwd/
 MAILCOW_PASS_SCHEME=BLF-CRYPT
 
 # ------------------------------
@@ -143,18 +143,21 @@ DBROOT=$(LC_ALL=C </dev/urandom tr -dc A-Za-z0-9 | head -c 28)
 # If you use a proxy within Docker, point it to the ports you set below.
 # Do _not_ use IP:PORT in HTTP(S)_BIND or HTTP(S)_PORT
 # IMPORTANT: Do not use port 8081, 9081 or 65510!
+# Example: HTTP_BIND=1.2.3.4
+# For IPv4 leave it as it is: HTTP_BIND= & HTTPS_PORT=
+# For IPv6 see https://mailcow.github.io/mailcow-dockerized-docs/post_installation/firststeps-ip_bindings/
 
 HTTP_PORT=80
-HTTP_BIND=0.0.0.0
+HTTP_BIND=
 
 HTTPS_PORT=443
-HTTPS_BIND=0.0.0.0
+HTTPS_BIND=
 
 # ------------------------------
 # Other bindings
 # ------------------------------
 # You should leave that alone
-# Format: 11.22.33.44:25 or 0.0.0.0:465 etc.
+# Format: 11.22.33.44:25 or 12.34.56.78:465 etc.
 
 SMTP_PORT=25
 SMTPS_PORT=465
@@ -198,7 +201,7 @@ MAILDIR_GC_TIME=7200
 # You can use wildcard records to create specific names for every domain you add to mailcow.
 # Example: Add domains "example.com" and "example.net" to mailcow, change ADDITIONAL_SAN to a value like:
 #ADDITIONAL_SAN=imap.*,smtp.*
-# This will expand the certificate to "imap.example.com", "smtp.example.com", "imap.example.net", "imap.example.net"
+# This will expand the certificate to "imap.example.com", "smtp.example.com", "imap.example.net", "smtp.example.net"
 # plus every domain you add in the future.
 #
 # You can also just add static names...
@@ -208,6 +211,16 @@ MAILDIR_GC_TIME=7200
 #
 
 ADDITIONAL_SAN=
+
+# Additional server names for mailcow UI
+#
+# Specify alternative addresses for the mailcow UI to respond to
+# This is useful when you set mail.* as ADDITIONAL_SAN and want to make sure mail.maildomain.com will always point to the mailcow UI.
+# If the server name does not match a known site, Nginx decides by best-guess and may redirect users to the wrong web root.
+# You can understand this as server_name directive in Nginx.
+# Comma separated list without spaces! Example: ADDITIONAL_SERVER_NAMES=a.b.c,d.e.f
+
+ADDITIONAL_SERVER_NAMES=
 
 # Skip running ACME (acme-mailcow, Let's Encrypt certs) - y/n
 
@@ -264,12 +277,18 @@ USE_WATCHDOG=y
 # Notify about banned IP (includes whois lookup)
 WATCHDOG_NOTIFY_BAN=n
 
+# Subject for watchdog mails. Defaults to "Watchdog ALERT" followed by the error message.
+#WATCHDOG_SUBJECT=
+
 # Checks if mailcow is an open relay. Requires a SAL. More checks will follow.
 # https://www.servercow.de/mailcow?lang=en
 # https://www.servercow.de/mailcow?lang=de
 # No data is collected. Opt-in and anonymous.
 # Will only work with unmodified mailcow setups.
 WATCHDOG_EXTERNAL_CHECKS=n
+
+# Enable watchdog verbose logging
+WATCHDOG_VERBOSE=n
 
 # Max log lines per service to keep in Redis logs
 
@@ -318,6 +337,18 @@ DOVECOT_MASTER_USER=
 # LEAVE EMPTY IF UNSURE
 DOVECOT_MASTER_PASS=
 
+# Let's Encrypt registration contact information
+# Optional: Leave empty for none
+# This value is only used on first order!
+# Setting it at a later point will require the following steps:
+# https://mailcow.github.io/mailcow-dockerized-docs/troubleshooting/debug-reset_tls/
+ACME_CONTACT=
+
+# WebAuthn device manufacturer verification
+# After setting WEBAUTHN_ONLY_TRUSTED_VENDORS=y only devices from trusted manufacturers are allowed
+# root certificates can be placed for validation under mailcow-dockerized/data/web/inc/lib/WebAuthn/rootCertificates
+WEBAUTHN_ONLY_TRUSTED_VENDORS=n
+
 EOF
 
 mkdir -p data/assets/ssl
@@ -330,3 +361,18 @@ echo "Generating snake-oil certificate..."
 openssl req -x509 -newkey rsa:4096 -keyout data/assets/ssl-example/key.pem -out data/assets/ssl-example/cert.pem -days 365 -subj "/C=DE/ST=NRW/L=Willich/O=mailcow/OU=mailcow/CN=${MAILCOW_HOSTNAME}" -sha256 -nodes
 echo "Copying snake-oil certificate..."
 cp -n -d data/assets/ssl-example/*.pem data/assets/ssl/
+
+# Set app_info.inc.php
+mailcow_git_version=$(git describe --tags `git rev-list --tags --max-count=1`)
+if [ $? -eq 0 ]; then
+  echo '<?php' > data/web/inc/app_info.inc.php
+  echo '  $MAILCOW_GIT_VERSION="'$mailcow_git_version'";' >> data/web/inc/app_info.inc.php
+  echo '  $MAILCOW_GIT_URL="https://github.com/mailcow/mailcow-dockerized";' >> data/web/inc/app_info.inc.php
+  echo '?>' >> data/web/inc/app_info.inc.php
+else
+  echo '<?php' > data/web/inc/app_info.inc.php
+  echo '  $MAILCOW_GIT_VERSION="";' >> data/web/inc/app_info.inc.php
+  echo '  $MAILCOW_GIT_URL="";' >> data/web/inc/app_info.inc.php
+  echo '?>' >> data/web/inc/app_info.inc.php
+  echo -e "\e[33mCannot determine current git repository version...\e[0m"
+fi

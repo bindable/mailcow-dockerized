@@ -1,4 +1,4 @@
-FROM alpine:3.11
+FROM alpine:3.16
 
 LABEL maintainer "Andre Peters <andre.peters@servercow.de>"
 
