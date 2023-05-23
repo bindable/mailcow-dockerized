@@ -251,7 +251,7 @@ function password_check($password1, $password2) {
 
   return true;
 }
-function last_login($action, $username, $sasl_limit_days = 7) {
+function last_login($action, $username, $sasl_limit_days = 7, $ui_offset = 1) {
   global $pdo;
   global $redis;
   $sasl_limit_days = intval($sasl_limit_days);
@@ -319,8 +319,11 @@ function last_login($action, $username, $sasl_limit_days = 7) {
         $stmt = $pdo->prepare('SELECT `remote`, `time` FROM `logs`
           WHERE JSON_EXTRACT(`call`, "$[0]") = "check_login"
             AND JSON_EXTRACT(`call`, "$[1]") = :username
-            AND `type` = "success" ORDER BY `time` DESC LIMIT 1 OFFSET 1');
-        $stmt->execute(array(':username' => $username));
+            AND `type` = "success" ORDER BY `time` DESC LIMIT 1 OFFSET :offset');
+        $stmt->execute(array(
+          ':username' => $username,
+          ':offset' => $ui_offset
+        ));
         $ui = $stmt->fetch(PDO::FETCH_ASSOC);
       }
       else {
@@ -1012,20 +1015,58 @@ function formatBytes($size, $precision = 2) {
   }
   return round(pow(1024, $base - floor($base)), $precision) . $suffixes[floor($base)];
 }
-function update_sogo_static_view() {
+function update_sogo_static_view($mailbox = null) {
   if (getenv('SKIP_SOGO') == "y") {
     return true;
   }
   global $pdo;
   global $lang;
-  $stmt = $pdo->query("SELECT 'OK' FROM INFORMATION_SCHEMA.TABLES
-    WHERE TABLE_NAME = 'sogo_view'");
-  $num_results = count($stmt->fetchAll(PDO::FETCH_ASSOC));
-  if ($num_results != 0) {
-    $stmt = $pdo->query("REPLACE INTO _sogo_static_view (`c_uid`, `domain`, `c_name`, `c_password`, `c_cn`, `mail`, `aliases`, `ad_aliases`, `ext_acl`, `kind`, `multiple_bookings`)
-      SELECT `c_uid`, `domain`, `c_name`, `c_password`, `c_cn`, `mail`, `aliases`, `ad_aliases`, `ext_acl`, `kind`, `multiple_bookings` from sogo_view");
-    $stmt = $pdo->query("DELETE FROM _sogo_static_view WHERE `c_uid` NOT IN (SELECT `username` FROM `mailbox` WHERE `active` = '1');");
+
+  $mailbox_exists = false;
+  if ($mailbox !== null) {
+    // Check if the mailbox exists
+    $stmt = $pdo->prepare("SELECT username FROM mailbox WHERE username = :mailbox AND active = '1'");
+    $stmt->execute(array(':mailbox' => $mailbox));
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);  
+    if ($row){
+      $mailbox_exists = true;
+    }
   }
+
+  $query = "REPLACE INTO _sogo_static_view (`c_uid`, `domain`, `c_name`, `c_password`, `c_cn`, `mail`, `aliases`, `ad_aliases`, `ext_acl`, `kind`, `multiple_bookings`)
+            SELECT
+              mailbox.username,
+              mailbox.domain,
+              mailbox.username,
+              IF(JSON_UNQUOTE(JSON_VALUE(attributes, '$.force_pw_update')) = '0',
+                 IF(JSON_UNQUOTE(JSON_VALUE(attributes, '$.sogo_access')) = 1, password, '{SSHA256}A123A123A321A321A321B321B321B123B123B321B432F123E321123123321321'),
+                 '{SSHA256}A123A123A321A321A321B321B321B123B123B321B432F123E321123123321321'),
+              mailbox.name,
+              mailbox.username,
+              IFNULL(GROUP_CONCAT(ga.aliases ORDER BY ga.aliases SEPARATOR ' '), ''),
+              IFNULL(gda.ad_alias, ''),
+              IFNULL(external_acl.send_as_acl, ''),
+              mailbox.kind,
+              mailbox.multiple_bookings
+            FROM
+              mailbox
+              LEFT OUTER JOIN grouped_mail_aliases ga ON ga.username REGEXP CONCAT('(^|,)', mailbox.username, '($|,)')
+              LEFT OUTER JOIN grouped_domain_alias_address gda ON gda.username = mailbox.username
+              LEFT OUTER JOIN grouped_sender_acl_external external_acl ON external_acl.username = mailbox.username
+            WHERE
+              mailbox.active = '1'";
+  
+  if ($mailbox_exists) {
+    $query .= " AND mailbox.username = :mailbox";
+    $stmt = $pdo->prepare($query);
+    $stmt->execute(array(':mailbox' => $mailbox));
+  } else {
+    $query .= " GROUP BY mailbox.username";
+    $stmt = $pdo->query($query);
+  }
+  
+  $stmt = $pdo->query("DELETE FROM _sogo_static_view WHERE `c_uid` NOT IN (SELECT `username` FROM `mailbox` WHERE `active` = '1');");
+  
   flush_memcached();
 }
 function edit_user_account($_data) {
@@ -1736,7 +1777,7 @@ function verify_tfa_login($username, $_data) {
               $_SESSION['return'][] =  array(
                   'type' => 'danger',
                   'log' => array(__FUNCTION__, $username, '*'),
-                  'msg' => array('webauthn_verification_failed', 'authenticator not found')
+                  'msg' => array('webauthn_authenticator_failed')
               );
               return false;
             } 
@@ -1745,9 +1786,18 @@ function verify_tfa_login($username, $_data) {
                 $_SESSION['return'][] =  array(
                     'type' => 'danger',
                     'log' => array(__FUNCTION__, $username, '*'),
-                    'msg' => array('webauthn_verification_failed', 'publicKey not found')
+                    'msg' => array('webauthn_publickey_failed')
                 );
                 return false;
+            }
+
+            if ($process_webauthn['username'] != $_SESSION['pending_mailcow_cc_username']){
+              $_SESSION['return'][] =  array(
+                  'type' => 'danger',
+                  'log' => array(__FUNCTION__, $username, '*'),
+                  'msg' => array('webauthn_username_failed')
+              );
+              return false;
             }
 
             try {
@@ -1781,19 +1831,10 @@ function verify_tfa_login($username, $_data) {
                 $_SESSION['return'][] =  array(
                   'type' => 'danger',
                   'log' => array(__FUNCTION__, $username, '*'),
-                  'msg' => array('webauthn_verification_failed', 'could not determine user role')
+                  'msg' => array('webauthn_role_failed')
                 );
                 return false;
               }
-            }
-
-            if ($process_webauthn['username'] != $_SESSION['pending_mailcow_cc_username']){
-                $_SESSION['return'][] =  array(
-                    'type' => 'danger',
-                    'log' => array(__FUNCTION__, $username, '*'),
-                    'msg' => array('webauthn_verification_failed', 'user who requests does not match with sql entry')
-                );
-                return false;
             }
 
             $_SESSION["mailcow_cc_username"] = $process_webauthn['username'];
