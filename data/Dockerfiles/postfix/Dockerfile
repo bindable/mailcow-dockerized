@@ -1,8 +1,9 @@
-FROM debian:bullseye-slim
-LABEL maintainer "The Infrastructure Company GmbH <info@servercow.de>"
+FROM debian:bookworm-slim
+
+LABEL maintainer="The Infrastructure Company GmbH <info@servercow.de>"
 
 ARG DEBIAN_FRONTEND=noninteractive
-ENV LC_ALL C
+ENV LC_ALL=C
 
 RUN dpkg-divert --local --rename --add /sbin/initctl \
 	&& ln -sf /bin/true /sbin/initctl \
@@ -59,4 +60,4 @@ EXPOSE 588
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
 
-CMD exec /usr/bin/supervisord -c /etc/supervisor/supervisord.conf
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]

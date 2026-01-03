@@ -24,6 +24,7 @@ catch (PDOException $e) {
 // Init Redis
 $redis = new Redis();
 $redis->connect('redis-mailcow', 6379);
+$redis->auth(getenv("REDISPASS"));
 
 // Functions
 function parse_email($email) {
@@ -53,7 +54,7 @@ $qid      = $headers['X-Rspamd-Qid'];
 $rcpts    = $headers['X-Rspamd-Rcpt'];
 $sender   = $headers['X-Rspamd-From'];
 $ip       = $headers['X-Rspamd-Ip'];
-$subject  = $headers['X-Rspamd-Subject'];
+$subject  = iconv_mime_decode($headers['X-Rspamd-Subject']);
 $messageid= $json_body->message_id;
 $priority = 0;
 
@@ -166,7 +167,7 @@ foreach (json_decode($rcpts, true) as $rcpt) {
               error_log("RCPT RESOVLER: http pipe: goto address " . $goto . " is an alias branch for " . $goto_branch . PHP_EOL);
               $goto_branch_array = explode(',', $goto_branch);
             } else {
-              $stmt = $pdo->prepare("SELECT `target_domain` FROM `alias_domain` WHERE `alias_domain` = :domain AND `active` AND '1'");
+              $stmt = $pdo->prepare("SELECT `target_domain` FROM `alias_domain` WHERE `alias_domain` = :domain AND `active` = '1'");
               $stmt->execute(array(':domain' => $parsed_goto['domain']));
               $goto_branch = $stmt->fetch(PDO::FETCH_ASSOC)['target_domain'];
               if ($goto_branch) {

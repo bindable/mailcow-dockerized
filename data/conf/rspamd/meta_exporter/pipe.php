@@ -24,6 +24,7 @@ catch (PDOException $e) {
 // Init Redis
 $redis = new Redis();
 $redis->connect('redis-mailcow', 6379);
+$redis->auth(getenv("REDISPASS"));
 
 // Functions
 function parse_email($email) {
@@ -52,7 +53,7 @@ $headers = getallheaders();
 
 $qid      = $headers['X-Rspamd-Qid'];
 $fuzzy    = $headers['X-Rspamd-Fuzzy'];
-$subject  = $headers['X-Rspamd-Subject'];
+$subject  = iconv_mime_decode($headers['X-Rspamd-Subject']);
 $score    = $headers['X-Rspamd-Score'];
 $rcpts    = $headers['X-Rspamd-Rcpt'];
 $user     = $headers['X-Rspamd-User'];
@@ -96,10 +97,10 @@ $rcpt_final_mailboxes = array();
 foreach (json_decode($rcpts, true) as $rcpt) {
   // Remove tag
   $rcpt = preg_replace('/^(.*?)\+.*(@.*)$/', '$1$2', $rcpt);
-  
+
   // Break rcpt into local part and domain part
   $parsed_rcpt = parse_email($rcpt);
-  
+
   // Skip if not a mailcow handled domain
   try {
     if (!$redis->hGet('DOMAIN_MAP', $parsed_rcpt['domain'])) {
@@ -181,7 +182,7 @@ foreach (json_decode($rcpts, true) as $rcpt) {
               error_log("RCPT RESOVLER: http pipe: goto address " . $goto . " is an alias branch for " . $goto_branch . PHP_EOL);
               $goto_branch_array = explode(',', $goto_branch);
             } else {
-              $stmt = $pdo->prepare("SELECT `target_domain` FROM `alias_domain` WHERE `alias_domain` = :domain AND `active` AND '1'");
+              $stmt = $pdo->prepare("SELECT `target_domain` FROM `alias_domain` WHERE `alias_domain` = :domain AND `active` = '1'");
               $stmt->execute(array(':domain' => $parsed_goto['domain']));
               $goto_branch = $stmt->fetch(PDO::FETCH_ASSOC)['target_domain'];
               if ($goto_branch) {
@@ -235,6 +236,9 @@ foreach ($rcpt_final_mailboxes as $rcpt_final) {
       ':action' => $action,
       ':fuzzy_hashes' => $fuzzy
     ));
+    $lastId = $pdo->lastInsertId();
+    $stmt_update = $pdo->prepare("UPDATE `quarantine` SET `qhash` = SHA2(CONCAT(`id`, `qid`), 256) WHERE `id` = :id");
+    $stmt_update->execute(array(':id' => $lastId));
     $stmt = $pdo->prepare('DELETE FROM `quarantine` WHERE `rcpt` = :rcpt AND `id` NOT IN (
       SELECT `id`
       FROM (
@@ -243,7 +247,7 @@ foreach ($rcpt_final_mailboxes as $rcpt_final) {
         WHERE `rcpt` = :rcpt2
         ORDER BY id DESC
         LIMIT :retention_size
-      ) x 
+      ) x
     );');
     $stmt->execute(array(
       ':rcpt' => $rcpt_final,

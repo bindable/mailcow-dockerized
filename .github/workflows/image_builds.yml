@@ -23,12 +23,11 @@ jobs:
           - "postfix-mailcow"
           - "rspamd-mailcow"
           - "sogo-mailcow"
-          - "solr-mailcow"
           - "unbound-mailcow"
           - "watchdog-mailcow"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Docker
         run: |
           curl -sSL https://get.docker.com/ | CHANNEL=stable sudo sh

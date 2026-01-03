@@ -1,3 +1,3 @@
-FROM debian:bullseye-slim
+FROM debian:trixie-slim
 
-RUN apt update && apt install pigz
+RUN apt update && apt install pigz zstd -y --no-install-recommends

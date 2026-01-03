@@ -10,46 +10,6 @@ echo "If this script is run automatically by cron or a timer AND you are using b
 echo "The snapshots of your backup destination should run AFTER the cold standby script finished to ensure consistent snapshots."
 echo
 
-function docker_garbage() {
-  IMGS_TO_DELETE=()
-
-  for container in $(grep -oP "image: \Kmailcow.+" docker-compose.yml); do
-
-    REPOSITORY=${container/:*}
-    TAG=${container/*:}
-    V_MAIN=${container/*.}
-    V_SUB=${container/*.}
-    EXISTING_TAGS=$(docker images | grep ${REPOSITORY} | awk '{ print $2 }')
-
-    for existing_tag in ${EXISTING_TAGS[@]}; do
-
-      V_MAIN_EXISTING=${existing_tag/*.}
-      V_SUB_EXISTING=${existing_tag/*.}
-
-      # Not an integer
-      [[ ! ${V_MAIN_EXISTING} =~ ^[0-9]+$ ]] && continue
-      [[ ! ${V_SUB_EXISTING} =~ ^[0-9]+$ ]] && continue
-
-      if [[ ${V_MAIN_EXISTING} == "latest" ]]; then
-        echo "Found deprecated label \"latest\" for repository ${REPOSITORY}, it should be deleted."
-        IMGS_TO_DELETE+=(${REPOSITORY}:${existing_tag})
-      elif [[ ${V_MAIN_EXISTING} -lt ${V_MAIN} ]]; then
-        echo "Found tag ${existing_tag} for ${REPOSITORY}, which is older than the current tag ${TAG} and should be deleted."
-        IMGS_TO_DELETE+=(${REPOSITORY}:${existing_tag})
-      elif [[ ${V_SUB_EXISTING} -lt ${V_SUB} ]]; then
-        echo "Found tag ${existing_tag} for ${REPOSITORY}, which is older than the current tag ${TAG} and should be deleted."
-        IMGS_TO_DELETE+=(${REPOSITORY}:${existing_tag})
-      fi
-
-    done
-
-  done
-
-  if [[ ! -z ${IMGS_TO_DELETE[*]} ]]; then
-    docker rmi ${IMGS_TO_DELETE[*]}
-  fi
-}
-
 function preflight_local_checks() {
   if [[ -z "${REMOTE_SSH_KEY}" ]]; then
     >&2 echo -e "\e[31mREMOTE_SSH_KEY is not set\e[0m"
@@ -139,25 +99,25 @@ EOF
 
 if [ $? = 0 ]; then
   COMPOSE_COMMAND="docker compose"
-  echo "DEBUG: Using native docker compose on remote"
+  echo "INFO: Using native docker compose on remote"
 
 elif [ $? = 1 ]; then
   COMPOSE_COMMAND="docker-compose"
-  echo "DEBUG: Using standalone docker compose on remote"
+  echo "INFO: Using standalone docker compose on remote"
 
 else
   echo -e "\e[31mCannot find any Docker Compose on remote, exiting...\e[0m"
   exit 1
 fi
 
- REMOTE_ARCH=$(ssh -o StrictHostKeyChecking=no -i "${REMOTE_SSH_KEY}" ${REMOTE_SSH_HOST} -p ${REMOTE_SSH_PORT} "uname -m") 
+ REMOTE_ARCH=$(ssh -o StrictHostKeyChecking=no -i "${REMOTE_SSH_KEY}" ${REMOTE_SSH_HOST} -p ${REMOTE_SSH_PORT} "uname -m")
 
 }
 
 SCRIPT_DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 source "${SCRIPT_DIR}/../mailcow.conf"
 COMPOSE_FILE="${SCRIPT_DIR}/../docker-compose.yml"
-CMPS_PRJ=$(echo ${COMPOSE_PROJECT_NAME} | tr -cd 'A-Za-z-_')
+CMPS_PRJ=$(echo ${COMPOSE_PROJECT_NAME} | tr -cd '0-9A-Za-z-_')
 SQLIMAGE=$(grep -iEo '(mysql|mariadb)\:.+' "${COMPOSE_FILE}")
 
 preflight_local_checks
@@ -202,9 +162,20 @@ if [ ${ec} -ne 0 ] && [ ${ec} -ne 24 ]; then
   exit 1
 fi
 
+# Let the remote side create all network, volumes and containers to prevent need for external:true #
+echo -e "\e[33mCreating networks, volumes and containers on remote...\e[0m"
+
+if ! ssh -o StrictHostKeyChecking=no \
+  -i "${REMOTE_SSH_KEY}" \
+  ${REMOTE_SSH_HOST} \
+  -p ${REMOTE_SSH_PORT} \
+  "cd \"${SCRIPT_DIR}/../\" && ${COMPOSE_COMMAND} create 2>&1" ; then
+    >&2 echo -e "\e[31m[ERR]\e[0m - Could not create networks, volumes and containers on remote"
+fi
+
 # Trigger a Redis save for a consistent Redis copy
 echo -ne "\033[1mRunning redis-cli save... \033[0m"
-docker exec $(docker ps -qf name=redis-mailcow) redis-cli save
+docker exec $(docker ps -qf name=redis-mailcow) redis-cli -a ${REDISPASS} --no-auth-warning save
 
 # Syncing volumes related to compose project
 # Same here: make sure destination exists
@@ -313,7 +284,7 @@ echo "OK"
     -i "${REMOTE_SSH_KEY}" \
     ${REMOTE_SSH_HOST} \
     -p ${REMOTE_SSH_PORT} \
-    ${COMPOSE_COMMAND} -f "${SCRIPT_DIR}/../docker-compose.yml" pull --no-parallel --quiet 2>&1 ; then
+    "cd \"${SCRIPT_DIR}/../\" && ${COMPOSE_COMMAND} pull --quiet 2>&1" ; then
       >&2 echo -e "\e[31m[ERR]\e[0m - Could not pull images on remote"
   fi
 
@@ -322,7 +293,7 @@ if ! ssh -o StrictHostKeyChecking=no \
   -i "${REMOTE_SSH_KEY}" \
   ${REMOTE_SSH_HOST} \
   -p ${REMOTE_SSH_PORT} \
-  ${SCRIPT_DIR}/../update.sh -f --gc ; then
+  "cd \"${SCRIPT_DIR}/../\" && ./update.sh -f --gc" ; then
     >&2 echo -e "\e[31m[ERR]\e[0m - Could not cleanup old images on remote"
 fi
 
